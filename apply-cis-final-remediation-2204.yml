@@ -1,0 +1,273 @@
+---
+- name: Apply Final CIS Level 1 Remediation
+  hosts: ubuntu
+  become: true
+  gather_facts: false
+
+  vars:
+
+    # ============================================================
+    # Host-specific final remediation script
+    #
+    # Example:
+    # oscap-artifacts/
+    # └── 192.168.10.22/
+    #     └── final_remediation_192.168.10.22.sh
+    # ============================================================
+
+    remediation_script: >-
+      oscap-artifacts/{{ inventory_hostname }}/final_remediation_{{ inventory_hostname }}.sh
+
+    remote_script: >-
+      /tmp/final_cis_remediation_{{ inventory_hostname }}.sh
+
+
+  tasks:
+
+    # ============================================================
+    # 1. Display target information
+    # ============================================================
+
+    - name: Display remediation target
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "FINAL CIS LEVEL 1 REMEDIATION"
+          - "============================================================"
+          - "Target server      : {{ inventory_hostname }}"
+          - "Repository script  : {{ remediation_script }}"
+          - "Remote script      : {{ remote_script }}"
+          - "============================================================"
+
+
+    # ============================================================
+    # 2. Verify final remediation script exists in repository
+    # ============================================================
+
+    - name: Check final remediation script exists
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/{{ remediation_script }}"
+      delegate_to: localhost
+      become: false
+      register: remediation_file
+
+
+    # ============================================================
+    # 3. Fail if final remediation script is missing
+    # ============================================================
+
+    - name: Fail if final remediation script is missing
+      ansible.builtin.assert:
+        that:
+          - remediation_file.stat.exists
+          - remediation_file.stat.isreg
+          - remediation_file.stat.size > 0
+        fail_msg: >-
+          FINAL remediation script was not found for
+          {{ inventory_hostname }}.
+
+          Expected file:
+          {{ playbook_dir }}/{{ remediation_script }}
+
+          Expected naming:
+          final_remediation_{{ inventory_hostname }}.sh
+
+
+    # ============================================================
+    # 4. Display script details
+    # ============================================================
+
+    - name: Display final remediation script details
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "REMEDIATION SCRIPT VERIFIED"
+          - "============================================================"
+          - "Server       : {{ inventory_hostname }}"
+          - "Script       : {{ remediation_script }}"
+          - "Size         : {{ remediation_file.stat.size }} bytes"
+          - "============================================================"
+
+
+    # ============================================================
+    # 5. Copy final remediation script to remote server
+    # ============================================================
+
+    - name: Copy final CIS remediation script
+      ansible.builtin.copy:
+        src: "{{ remediation_script }}"
+        dest: "{{ remote_script }}"
+        owner: root
+        group: root
+        mode: "0700"
+
+
+    # ============================================================
+    # 6. Verify copied script on remote server
+    # ============================================================
+
+    - name: Verify final remediation script on remote server
+      ansible.builtin.stat:
+        path: "{{ remote_script }}"
+      register: remote_script_stat
+
+
+    # ============================================================
+    # 7. Confirm remote script exists
+    # ============================================================
+
+    - name: Confirm final remediation script exists remotely
+      ansible.builtin.assert:
+        that:
+          - remote_script_stat.stat.exists
+          - remote_script_stat.stat.isreg
+          - remote_script_stat.stat.size > 0
+        fail_msg: >-
+          Final remediation script was not successfully copied
+          to {{ inventory_hostname }}.
+
+
+    # ============================================================
+    # 8. Display remote script information
+    # ============================================================
+
+    - name: Display remote script information
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "REMOTE REMEDIATION SCRIPT READY"
+          - "============================================================"
+          - "Server          : {{ inventory_hostname }}"
+          - "Remote path     : {{ remote_script }}"
+          - "File size       : {{ remote_script_stat.stat.size }} bytes"
+          - "Permissions     : 0700"
+          - "Owner           : root"
+          - "============================================================"
+
+
+    # ============================================================
+    # 9. Execute FINAL remediation script
+    #
+    # IMPORTANT:
+    # This executes ONLY the final_remediation_<IP>.sh file.
+    # The original remediation_<IP>.sh is NOT executed.
+    # ============================================================
+
+    - name: Execute FINAL CIS remediation
+      ansible.builtin.command:
+        cmd: "bash {{ remote_script }}"
+      register: remediation_result
+      changed_when: true
+
+
+    # ============================================================
+    # 10. Display remediation output
+    # ============================================================
+
+    - name: Display final remediation output
+      ansible.builtin.debug:
+        msg: "{{ remediation_result.stdout_lines }}"
+
+
+    # ============================================================
+    # 11. Display remediation errors
+    # ============================================================
+
+    - name: Display final remediation errors
+      ansible.builtin.debug:
+        msg: "{{ remediation_result.stderr_lines }}"
+      when:
+        - remediation_result.stderr_lines is defined
+        - remediation_result.stderr_lines | length > 0
+
+
+    # ============================================================
+    # 12. Display remediation return code
+    # ============================================================
+
+    - name: Display remediation return code
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "REMEDIATION EXECUTION RESULT"
+          - "============================================================"
+          - "Server       : {{ inventory_hostname }}"
+          - "Script       : final_remediation_{{ inventory_hostname }}.sh"
+          - "Return code  : {{ remediation_result.rc }}"
+          - "============================================================"
+
+
+    # ============================================================
+    # 13. Fail if remediation script returned an error
+    #
+    # A return code of 0 means the script completed successfully.
+    # ============================================================
+
+    - name: Verify remediation completed successfully
+      ansible.builtin.assert:
+        that:
+          - remediation_result.rc == 0
+        fail_msg: >-
+          FINAL CIS remediation script returned a non-zero exit code
+          on {{ inventory_hostname }}.
+
+          Return code:
+          {{ remediation_result.rc }}
+
+          Review the remediation stdout/stderr above before
+          proceeding with the post-remediation validation scan.
+
+
+    # ============================================================
+    # 14. Remove remediation script from remote server
+    #
+    # The GitHub copy remains available for audit/review.
+    # ============================================================
+
+    - name: Remove final remediation script from remote server
+      ansible.builtin.file:
+        path: "{{ remote_script }}"
+        state: absent
+
+
+    # ============================================================
+    # 15. Verify remote script was removed
+    # ============================================================
+
+    - name: Verify final remediation script was removed
+      ansible.builtin.stat:
+        path: "{{ remote_script }}"
+      register: removed_script
+
+
+    - name: Confirm final remediation script removal
+      ansible.builtin.assert:
+        that:
+          - not removed_script.stat.exists
+        fail_msg: >-
+          The temporary remediation script still exists on
+          {{ inventory_hostname }}:
+          {{ remote_script }}
+
+
+    # ============================================================
+    # 16. Final status
+    # ============================================================
+
+    - name: Final remediation status
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "FINAL CIS REMEDIATION COMPLETED"
+          - "============================================================"
+          - "Server              : {{ inventory_hostname }}"
+          - "Script executed     : final_remediation_{{ inventory_hostname }}.sh"
+          - "Execution result    : SUCCESS"
+          - "Remote script       : Removed"
+          - ""
+          - "The original remediation script was NOT executed."
+          - "The FINAL remediation script was executed."
+          - ""
+          - "Next step:"
+          - "Run the CIS Level 1 post-remediation validation scan."
+          - "============================================================"
