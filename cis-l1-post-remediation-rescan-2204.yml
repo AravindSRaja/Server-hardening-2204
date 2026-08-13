@@ -1,0 +1,651 @@
+---
+- name: Ubuntu 22.04 CIS Level 1 Post-Remediation Validation Scan
+  hosts: ubuntu
+  become: true
+  gather_facts: false
+
+  vars:
+
+    # ============================================================
+    # Fixed Ubuntu 22.04 CIS Level 1 configuration
+    # ============================================================
+
+    cis_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"
+
+    ssg_dir: "/usr/share/xml/scap/ssg/content"
+
+    datastream: "{{ ssg_dir }}/ssg-ubuntu2204-ds.xml"
+
+
+    # ============================================================
+    # Remote OpenSCAP directory
+    # ============================================================
+
+    scan_dir: "/var/lib/oscap"
+
+
+    # ============================================================
+    # Post-remediation filenames
+    #
+    # These are DIFFERENT from the initial assessment files.
+    # Therefore, the initial assessment will NOT be overwritten.
+    # ============================================================
+
+    post_remediation_results_file: >-
+      {{ scan_dir }}/cis_l1_post_remediation_validation_results_{{ inventory_hostname }}.xml
+
+    post_remediation_report_file: >-
+      {{ scan_dir }}/cis_l1_post_remediation_validation_report_{{ inventory_hostname }}.html
+
+
+    # ============================================================
+    # Semaphore / Git repository artifact directory
+    #
+    # The files will be stored in the SAME server directory
+    # used by the initial assessment.
+    #
+    # Example:
+    #
+    # oscap-artifacts/
+    # └── 192.168.1.38/
+    #     ├── results_192.168.1.38.xml
+    #     ├── report_192.168.1.38.html
+    #     ├── remediation_192.168.1.38.sh
+    #     ├── cis_l1_post_remediation_validation_results_192.168.1.38.xml
+    #     └── cis_l1_post_remediation_validation_report_192.168.1.38.html
+    # ============================================================
+
+    artifact_base_dir: "{{ playbook_dir }}/oscap-artifacts"
+
+    artifact_server_dir: >-
+      {{ artifact_base_dir }}/{{ inventory_hostname }}
+
+
+    # ============================================================
+    # Post-remediation artifact paths in Semaphore
+    # ============================================================
+
+    git_post_results_file: >-
+      {{ artifact_server_dir }}/cis_l1_post_remediation_validation_results_{{ inventory_hostname }}.xml
+
+    git_post_report_file: >-
+      {{ artifact_server_dir }}/cis_l1_post_remediation_validation_report_{{ inventory_hostname }}.html
+
+
+    # ============================================================
+    # GitHub repository
+    # ============================================================
+
+    expected_git_repo: "Server-hardening-2204"
+
+    expected_git_branch: "main"
+
+
+  tasks:
+
+    # ============================================================
+    # 1. Verify Ubuntu 22.04
+    # ============================================================
+
+    - name: Check Ubuntu version
+      ansible.builtin.command:
+        cmd: grep '^VERSION_ID=' /etc/os-release
+      register: ubuntu_version
+      changed_when: false
+
+
+    - name: Verify Ubuntu 22.04
+      ansible.builtin.assert:
+        that:
+          - '"VERSION_ID=\"22.04\"" in ubuntu_version.stdout'
+        fail_msg: >-
+          This playbook is specifically for Ubuntu 22.04.
+          Target does not appear to be Ubuntu 22.04.
+
+
+    # ============================================================
+    # 2. Verify OpenSCAP is installed
+    # ============================================================
+
+    - name: Check OpenSCAP installation
+      ansible.builtin.command:
+        cmd: oscap --version
+      register: oscap_version
+      changed_when: false
+
+
+    - name: Display OpenSCAP version
+      ansible.builtin.debug:
+        var: oscap_version.stdout_lines
+
+
+    # ============================================================
+    # 3. Verify Ubuntu 22.04 SSG datastream
+    # ============================================================
+
+    - name: Check Ubuntu 22.04 SSG datastream
+      ansible.builtin.stat:
+        path: "{{ datastream }}"
+      register: datastream_stat
+
+
+    - name: Verify Ubuntu 22.04 SSG datastream exists
+      ansible.builtin.assert:
+        that:
+          - datastream_stat.stat.exists
+          - datastream_stat.stat.size > 0
+        fail_msg: >-
+          Ubuntu 22.04 SSG datastream does not exist:
+          {{ datastream }}
+
+          Run the initial OpenSCAP installation/assessment
+          playbook first.
+
+
+    # ============================================================
+    # 4. Verify CIS Level 1 profile
+    # ============================================================
+
+    - name: Check CIS Level 1 profile
+      ansible.builtin.command:
+        cmd: oscap info "{{ datastream }}"
+      register: oscap_info
+      changed_when: false
+
+
+    - name: Verify CIS Level 1 profile exists
+      ansible.builtin.assert:
+        that:
+          - cis_profile in oscap_info.stdout
+        fail_msg: >-
+          CIS Level 1 Server profile was not found in:
+          {{ datastream }}
+
+
+    # ============================================================
+    # 5. Display scan configuration
+    # ============================================================
+
+    - name: Display post-remediation scan configuration
+      ansible.builtin.debug:
+        msg:
+          - "=================================================="
+          - "POST-REMEDIATION CIS L1 VALIDATION"
+          - "=================================================="
+          - "Server       : {{ inventory_hostname }}"
+          - "OS           : Ubuntu 22.04"
+          - "Profile      : {{ cis_profile }}"
+          - "Datastream   : {{ datastream }}"
+          - "Git Repo     : {{ expected_git_repo }}"
+          - "Git Branch   : {{ expected_git_branch }}"
+          - ""
+          - "This is a VALIDATION scan."
+          - "No remediation will be generated."
+          - "No remediation will be executed."
+          - "=================================================="
+
+
+    # ============================================================
+    # 6. Create remote OpenSCAP directory
+    # ============================================================
+
+    - name: Ensure OpenSCAP directory exists
+      ansible.builtin.file:
+        path: "{{ scan_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+
+    # ============================================================
+    # 7. Remove ONLY previous post-remediation files
+    #
+    # IMPORTANT:
+    # Initial assessment files are NOT touched.
+    # ============================================================
+
+    - name: Remove previous post-remediation XML result
+      ansible.builtin.file:
+        path: "{{ post_remediation_results_file }}"
+        state: absent
+
+
+    - name: Remove previous post-remediation HTML report
+      ansible.builtin.file:
+        path: "{{ post_remediation_report_file }}"
+        state: absent
+
+
+    # ============================================================
+    # 8. Run post-remediation CIS Level 1 scan
+    # ============================================================
+
+    - name: Run post-remediation CIS Level 1 validation
+      ansible.builtin.command:
+        cmd: >
+          oscap xccdf eval
+          --profile "{{ cis_profile }}"
+          --results "{{ post_remediation_results_file }}"
+          --report "{{ post_remediation_report_file }}"
+          "{{ datastream }}"
+      register: post_remediation_scan
+      changed_when: false
+
+      # OpenSCAP:
+      # 0 = assessment completed without findings
+      # 2 = assessment completed with findings
+      #
+      # Both are valid assessment outcomes.
+      # Other return codes indicate an execution problem.
+
+      failed_when: post_remediation_scan.rc not in [0, 2]
+
+
+    # ============================================================
+    # 9. Display scan output
+    # ============================================================
+
+    - name: Display post-remediation scan output
+      ansible.builtin.debug:
+        var: post_remediation_scan.stdout_lines
+
+
+    # ============================================================
+    # 10. Display warnings/errors
+    # ============================================================
+
+    - name: Display OpenSCAP stderr
+      ansible.builtin.debug:
+        var: post_remediation_scan.stderr_lines
+      when:
+        - post_remediation_scan.stderr_lines is defined
+        - post_remediation_scan.stderr_lines | length > 0
+
+
+    # ============================================================
+    # 11. Display return code
+    # ============================================================
+
+    - name: Display post-remediation scan return code
+      ansible.builtin.debug:
+        msg:
+          - "Server      : {{ inventory_hostname }}"
+          - "Return code : {{ post_remediation_scan.rc }}"
+
+
+    # ============================================================
+    # 12. Verify XML result
+    # ============================================================
+
+    - name: Check post-remediation XML result
+      ansible.builtin.stat:
+        path: "{{ post_remediation_results_file }}"
+      register: post_results_stat
+
+
+    # ============================================================
+    # 13. Verify HTML report
+    # ============================================================
+
+    - name: Check post-remediation HTML report
+      ansible.builtin.stat:
+        path: "{{ post_remediation_report_file }}"
+      register: post_report_stat
+
+
+    # ============================================================
+    # 14. Validate generated files
+    # ============================================================
+
+    - name: Verify post-remediation reports were generated
+      ansible.builtin.assert:
+        that:
+          - post_results_stat.stat.exists
+          - post_report_stat.stat.exists
+          - post_results_stat.stat.size > 0
+          - post_report_stat.stat.size > 0
+        fail_msg: >-
+          Post-remediation OpenSCAP reports were not generated correctly.
+
+
+    # ============================================================
+    # 15. Display generated file information
+    # ============================================================
+
+    - name: Display post-remediation report information
+      ansible.builtin.debug:
+        msg:
+          - "=================================================="
+          - "POST-REMEDIATION VALIDATION COMPLETED"
+          - "=================================================="
+          - "Server       : {{ inventory_hostname }}"
+          - ""
+          - "XML Result:"
+          - "{{ post_remediation_results_file }}"
+          - ""
+          - "HTML Report:"
+          - "{{ post_remediation_report_file }}"
+          - ""
+          - "XML Size    : {{ post_results_stat.stat.size }} bytes"
+          - "HTML Size   : {{ post_report_stat.stat.size }} bytes"
+          - ""
+          - "No remediation script was generated."
+          - "No remediation was executed."
+          - "=================================================="
+
+
+    # ============================================================
+    # 16. Create SAME server directory in Semaphore repository
+    # ============================================================
+
+    - name: Create server artifact directory on Semaphore
+      ansible.builtin.file:
+        path: "{{ artifact_server_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+
+    # ============================================================
+    # 17. Fetch post-remediation XML to Semaphore
+    # ============================================================
+
+    - name: Fetch post-remediation XML result to Semaphore
+      ansible.builtin.fetch:
+        src: "{{ post_remediation_results_file }}"
+        dest: "{{ git_post_results_file }}"
+        flat: true
+
+
+    # ============================================================
+    # 18. Fetch post-remediation HTML to Semaphore
+    # ============================================================
+
+    - name: Fetch post-remediation HTML report to Semaphore
+      ansible.builtin.fetch:
+        src: "{{ post_remediation_report_file }}"
+        dest: "{{ git_post_report_file }}"
+        flat: true
+
+
+    # ============================================================
+    # 19. Verify artifacts on Semaphore
+    # ============================================================
+
+    - name: Verify post-remediation XML on Semaphore
+      ansible.builtin.stat:
+        path: "{{ git_post_results_file }}"
+      delegate_to: localhost
+      become: false
+      register: git_post_results_stat
+
+
+    - name: Verify post-remediation HTML on Semaphore
+      ansible.builtin.stat:
+        path: "{{ git_post_report_file }}"
+      delegate_to: localhost
+      become: false
+      register: git_post_report_stat
+
+
+    - name: Validate post-remediation artifacts on Semaphore
+      ansible.builtin.assert:
+        that:
+          - git_post_results_stat.stat.exists
+          - git_post_results_stat.stat.size > 0
+          - git_post_report_stat.stat.exists
+          - git_post_report_stat.stat.size > 0
+        fail_msg: >-
+          One or more post-remediation artifacts failed
+          to transfer to the Semaphore repository.
+
+
+    # ============================================================
+    # 20. Display Semaphore artifact location
+    # ============================================================
+
+    - name: Display post-remediation artifact location
+      ansible.builtin.debug:
+        msg:
+          - "=================================================="
+          - "POST-REMEDIATION ARTIFACTS SAVED"
+          - "=================================================="
+          - "Server directory:"
+          - "{{ artifact_server_dir }}"
+          - ""
+          - "XML:"
+          - "{{ git_post_results_file }}"
+          - ""
+          - "HTML:"
+          - "{{ git_post_report_file }}"
+          - "=================================================="
+
+
+  # ==================================================================
+  # POST TASKS
+  #
+  # Git operations occur only after ALL target servers have completed
+  # their post-remediation scans and fetched their artifacts.
+  # ==================================================================
+
+  post_tasks:
+
+    # ============================================================
+    # 21. Get Git remote
+    # ============================================================
+
+    - name: Get Git remote URL
+      ansible.builtin.command:
+        cmd: git remote get-url origin
+      args:
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: false
+      register: git_remote
+
+
+    - name: Display Git remote
+      ansible.builtin.debug:
+        msg:
+          - "Git remote configured in Semaphore:"
+          - "{{ git_remote.stdout }}"
+      run_once: true
+
+
+    # ============================================================
+    # 22. Verify correct GitHub repository
+    # ============================================================
+
+    - name: Verify correct GitHub repository
+      ansible.builtin.assert:
+        that:
+          - expected_git_repo | lower in git_remote.stdout | lower
+        fail_msg: >-
+          The Semaphore repository does not appear to be:
+          {{ expected_git_repo }}.
+
+          Current Git remote:
+          {{ git_remote.stdout }}
+
+          Aborting Git upload to prevent artifacts from being
+          pushed to the wrong repository.
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+
+    # ============================================================
+    # 23. Configure Git identity
+    # ============================================================
+
+    - name: Configure Git username
+      ansible.builtin.command:
+        cmd: git config user.name "Semaphore CIS Compliance"
+      args:
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+
+    - name: Configure Git email
+      ansible.builtin.command:
+        cmd: git config user.email "semaphore-cis-compliance@users.noreply.github.com"
+      args:
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+
+    # ============================================================
+    # 24. Check Git status
+    # ============================================================
+
+    - name: Check Git status
+      ansible.builtin.command:
+        cmd: git status --short
+      args:
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: false
+      register: git_status
+
+
+    - name: Display Git changes
+      ansible.builtin.debug:
+        var: git_status.stdout_lines
+      run_once: true
+
+
+    # ============================================================
+    # 25. Add post-remediation artifacts
+    # ============================================================
+
+    - name: Add post-remediation artifacts to Git
+      ansible.builtin.command:
+        cmd: git add oscap-artifacts/
+      args:
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+
+    # ============================================================
+    # 26. Check staged files
+    # ============================================================
+
+    - name: Check staged OpenSCAP artifacts
+      ansible.builtin.command:
+        cmd: git diff --cached --name-status
+      args:
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: false
+      register: staged_files
+
+
+    - name: Display staged OpenSCAP artifacts
+      ansible.builtin.debug:
+        var: staged_files.stdout_lines
+      run_once: true
+
+
+    # ============================================================
+    # 27. Commit post-remediation artifacts
+    # ============================================================
+
+    - name: Commit post-remediation artifacts
+      ansible.builtin.command:
+        cmd: >
+          git commit
+          -m "Add CIS L1 post-remediation validation artifacts"
+      args:
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: git_commit
+      failed_when:
+        - git_commit.rc != 0
+        - "'nothing to commit' not in git_commit.stdout"
+        - "'nothing to commit' not in git_commit.stderr"
+
+
+    # ============================================================
+    # 28. Push to GitHub
+    # ============================================================
+
+    - name: Push post-remediation artifacts to GitHub
+      ansible.builtin.command:
+        cmd: "git push origin {{ expected_git_branch }}"
+      args:
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: git_push
+
+
+    # ============================================================
+    # 29. Display GitHub upload result
+    # ============================================================
+
+    - name: Display GitHub upload result
+      ansible.builtin.debug:
+        msg:
+          - "=================================================="
+          - "POST-REMEDIATION ARTIFACTS UPLOADED"
+          - "=================================================="
+          - "Repository : {{ expected_git_repo }}"
+          - "Branch     : {{ expected_git_branch }}"
+          - ""
+          - "Server directory:"
+          - "oscap-artifacts/{{ inventory_hostname }}/"
+          - ""
+          - "Files:"
+          - " - cis_l1_post_remediation_validation_results_{{ inventory_hostname }}.xml"
+          - " - cis_l1_post_remediation_validation_report_{{ inventory_hostname }}.html"
+          - ""
+          - "=================================================="
+      run_once: true
+
+
+    # ============================================================
+    # 30. Final status
+    # ============================================================
+
+    - name: Final post-remediation status
+      ansible.builtin.debug:
+        msg:
+          - "=================================================="
+          - "POST-REMEDIATION CIS L1 VALIDATION COMPLETED"
+          - "=================================================="
+          - ""
+          - "Remote server:"
+          - "{{ scan_dir }}/"
+          - ""
+          - "Semaphore / Git working tree:"
+          - "{{ artifact_server_dir }}/"
+          - ""
+          - "GitHub:"
+          - "https://github.com/AravindSRaja/Server-hardening-2204"
+          - ""
+          - "Server folder:"
+          - "oscap-artifacts/{{ inventory_hostname }}/"
+          - ""
+          - "Initial assessment artifacts remain unchanged."
+          - "Post-remediation XML and HTML are stored separately."
+          - "No remediation was generated."
+          - "No remediation was executed."
+          - "=================================================="
+      run_once: true
