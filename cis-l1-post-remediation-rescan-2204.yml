@@ -80,6 +80,19 @@
 
     expected_git_branch: "main"
 
+    # ============================================================
+    # GitHub authentication
+    #
+    # GITHUB_TOKEN must be configured in the Semaphore Variable
+    # Group as a SECRET environment variable.
+    #
+    # The PAT is NOT stored in this playbook.
+    # ============================================================
+
+    github_username: "AravindSRaja"
+    github_token_env: "GITHUB_TOKEN"
+    git_askpass_file: "/tmp/semaphore-github-askpass.sh"
+
 
   tasks:
 
@@ -582,7 +595,59 @@
 
 
     # ============================================================
-    # 28. Push to GitHub
+    # 28. Verify GitHub token
+    #
+    # The token is supplied by Semaphore as a SECRET environment
+    # variable named GITHUB_TOKEN.
+    # ============================================================
+
+    - name: Verify GitHub token is available
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', github_token_env) | length > 0
+        fail_msg: >-
+          GITHUB_TOKEN is not available to the Semaphore task.
+          Configure GITHUB_TOKEN as a SECRET environment variable
+          in the github-push Variable Group and attach that group
+          to this template.
+      delegate_to: localhost
+      become: false
+      run_once: true
+      no_log: true
+
+
+    # ============================================================
+    # 29. Create temporary GitHub authentication helper
+    #
+    # GIT_ASKPASS allows git push to authenticate without an
+    # interactive username/password prompt.
+    # ============================================================
+
+    - name: Create temporary GitHub GIT_ASKPASS helper
+      ansible.builtin.copy:
+        dest: "{{ git_askpass_file }}"
+        mode: "0700"
+        content: |
+          #!/bin/sh
+          case "$1" in
+            *Username*)
+              printf '%s\\n' "$GITHUB_USERNAME"
+              ;;
+            *Password*)
+              printf '%s\\n' "$GITHUB_TOKEN"
+              ;;
+            *)
+              printf '%s\\n' "$GITHUB_TOKEN"
+              ;;
+          esac
+      delegate_to: localhost
+      become: false
+      run_once: true
+      no_log: true
+
+
+    # ============================================================
+    # 30. Push post-remediation artifacts to GitHub
     # ============================================================
 
     - name: Push post-remediation artifacts to GitHub
@@ -590,6 +655,11 @@
         cmd: "git push origin {{ expected_git_branch }}"
       args:
         chdir: "{{ playbook_dir }}"
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+        GIT_ASKPASS: "{{ git_askpass_file }}"
+        GITHUB_USERNAME: "{{ github_username }}"
+        GITHUB_TOKEN: "{{ lookup('ansible.builtin.env', github_token_env) }}"
       delegate_to: localhost
       become: false
       run_once: true
@@ -597,7 +667,21 @@
 
 
     # ============================================================
-    # 29. Display GitHub upload result
+    # 31. Remove temporary GitHub authentication helper
+    # ============================================================
+
+    - name: Remove temporary GitHub GIT_ASKPASS helper
+      ansible.builtin.file:
+        path: "{{ git_askpass_file }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      run_once: true
+      no_log: true
+
+
+    # ============================================================
+    # 32. Display GitHub upload result
     # ============================================================
 
     - name: Display GitHub upload result
@@ -621,7 +705,7 @@
 
 
     # ============================================================
-    # 30. Final status
+    # 33. Final status
     # ============================================================
 
     - name: Final post-remediation status
