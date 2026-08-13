@@ -77,6 +77,18 @@
 
     expected_git_branch: "main"
 
+    # ============================================================
+    # GitHub authentication
+    #
+    # GITHUB_TOKEN must be provided to the Semaphore task as a
+    # SECRET environment variable / Variable Group value.
+    # The token is never stored in this playbook.
+    # ============================================================
+
+    github_username: "AravindSRaja"
+    github_token_env: "GITHUB_TOKEN"
+    git_askpass_file: "/tmp/semaphore-github-askpass.sh"
+
 
   tasks:
 
@@ -831,21 +843,77 @@
 
 
     # ============================================================
-    # 44. Push artifacts to GitHub
+    # 44. Authenticate and push artifacts to GitHub
     #
     # IMPORTANT:
-    # Semaphore's Git credential must have PUSH permission.
+    # - GITHUB_TOKEN must be configured as a SECRET variable in
+    #   the Semaphore Variable Group attached to this template.
+    # - The GitHub PAT must have Contents: Read and write access
+    #   to the Server-hardening-2204 repository.
+    # - The token is supplied through the environment and is NOT
+    #   placed in the repository URL, YAML, inventory, or command.
+    # - A temporary GIT_ASKPASS helper is used for non-interactive
+    #   authentication and is removed after the push.
     # ============================================================
+
+    - name: Verify GitHub token is available
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', github_token_env) | length > 0
+        fail_msg: >-
+          GITHUB_TOKEN is not available to the Semaphore task.
+          Create a secret variable named GITHUB_TOKEN in the
+          Semaphore Variable Group attached to this template.
+      delegate_to: localhost
+      become: false
+      run_once: true
+      no_log: true
+
+    - name: Create temporary GitHub GIT_ASKPASS helper
+      ansible.builtin.copy:
+        dest: "{{ git_askpass_file }}"
+        mode: "0700"
+        content: |
+          #!/bin/sh
+          case "$1" in
+            *Username*)
+              printf '%s\\n' "$GITHUB_USERNAME"
+              ;;
+            *Password*)
+              printf '%s\\n' "$GITHUB_TOKEN"
+              ;;
+            *)
+              printf '%s\\n' "$GITHUB_TOKEN"
+              ;;
+          esac
+      delegate_to: localhost
+      become: false
+      run_once: true
+      no_log: true
 
     - name: Push OpenSCAP artifacts to GitHub
       ansible.builtin.command:
         cmd: "git push origin {{ expected_git_branch }}"
       args:
         chdir: "{{ playbook_dir }}"
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+        GIT_ASKPASS: "{{ git_askpass_file }}"
+        GITHUB_USERNAME: "{{ github_username }}"
+        GITHUB_TOKEN: "{{ lookup('ansible.builtin.env', github_token_env) }}"
       delegate_to: localhost
       become: false
       run_once: true
       register: git_push
+
+    - name: Remove temporary GitHub GIT_ASKPASS helper
+      ansible.builtin.file:
+        path: "{{ git_askpass_file }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      run_once: true
+      no_log: true
 
 
     # ============================================================
@@ -906,7 +974,7 @@
           - "6. Artifacts retained on remote server"
           - "7. Artifacts fetched to Semaphore"
           - "8. Artifacts committed to Git"
-          - "9. Artifacts pushed to GitHub"
+          - "9. Artifacts pushed to GitHub using the Semaphore GITHUB_TOKEN secret"
           - ""
           - "IMPORTANT:"
           - "The remediation script was GENERATED ONLY."
